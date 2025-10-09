@@ -1,3 +1,5 @@
+#include "../include/kfi_internal.h"
+
 /*
  * Poll completions and translate to ib_wc format
  * This is performance-critical code
