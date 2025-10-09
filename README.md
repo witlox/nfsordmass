@@ -4,6 +4,7 @@ NFS over RDMA for HPE Slingshot using the kfabric kernel fabric interface.
 ## System Architecture Analysis
 Current NFSoRDMA Stack, the existing Linux implementation has this layering:
 
+```
 ┌─────────────────────────────────────┐
 │     NFS Client/Server (VFS layer)   │
 └─────────────────┬───────────────────┘
@@ -27,12 +28,12 @@ Current NFSoRDMA Stack, the existing Linux implementation has this layering:
 ┌─────────────────▼───────────────────┐
 │  Hardware Driver (mlx5, cxgb4, etc) │
 └─────────────────────────────────────┘
-
+```
 xprtrdma/svcrdma make direct calls to the RDMA Core verbs API (ib_post_send(), ib_post_recv(), ib_reg_mr(), etc.). 
 These APIs don't exist for CXI.
 
 ## Target Architecture with kfabric
-
+```
 ┌─────────────────────────────────────┐
 │     NFS Client/Server (VFS layer)   │
 └─────────────────┬───────────────────┘
@@ -58,7 +59,7 @@ These APIs don't exist for CXI.
 ┌─────────────────▼───────────────────┐
 │    CXI Hardware Driver (cxi.ko)     │
 └─────────────────────────────────────┘
-
+```
 NOTE: The [kfabric repository](https://github.com/ofiwg/kfabric) is marked as "experimental" with limited activity. 
 
 ### RDMA Verbs Operations Used by xprtrdma/svcrdma
@@ -129,6 +130,7 @@ ssize_t kfi_cq_read(struct kfid_cq *cq, void *buf, size_t count);
 ```
 
 | Aspect | RDMA Verbs | kfabric | Impact |
+| -------- | ------- | ------- | -------|
 | Connection model | Queue Pair (QP) centric | Endpoint centric | Moderate - abstraction shift |
 | Work requests | Chained linked list | Single operations | Significant - affects batching |
 | Memory keys | 32-bit rkey | 64-bit keys (CXI provider) | Moderate - data structure changes |
