@@ -1,3 +1,4 @@
+#include "kfi_verbs_compat.h"
 #include "../include/kfi_internal.h"
 
 /*
