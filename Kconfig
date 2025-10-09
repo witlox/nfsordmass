@@ -1,0 +1,12 @@
+config SUNRPC_XPRT_RDMA_KFI
+	tristate "RPC-over-RDMA transport using kfabric"
+	depends on SUNRPC && KFABRIC && CXI
+	default m
+	help
+	  This option enables NFS client and server to use RDMA
+	  transports over HPE Slingshot using the kfabric API.
+	  
+	  Requires kfabric and CXI provider to be available.
+	  
+	  To compile this support as a module, choose M. The module
+	  will be called xprtrdma_kfi.ko.
