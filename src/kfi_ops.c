@@ -1,5 +1,177 @@
 #include "kfi_verbs_compat.h"
+#include "kfi_internal.h"
 #include <linux/slab.h>
+#include <linux/uio.h>
+#include <rdma/kfi/mr.h>
+
+/*
+ * Helper functions for individual operations
+ */
+
+int kfi_do_send(struct kfi_qp *kqp, const struct ib_send_wr *wr)
+{
+    struct kfi_mr *kmr;
+    void *desc = NULL;
+    ssize_t ret;
+    int i;
+
+    if (wr->num_sge > 1) {
+        /* Vectored send */
+        struct kvec iov[KFI_MAX_SGE];
+        void *descs[KFI_MAX_SGE];
+
+        if (wr->num_sge > KFI_MAX_SGE) {
+            pr_err("kfi_do_send: num_sge %d exceeds max %d\n",
+                   wr->num_sge, KFI_MAX_SGE);
+            return -EINVAL;
+        }
+
+        for (i = 0; i < wr->num_sge; i++) {
+            iov[i].iov_base = (void *)(uintptr_t)wr->sg_list[i].addr;
+            iov[i].iov_len = wr->sg_list[i].length;
+
+            kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[i].lkey;
+            descs[i] = kfi_mr_desc(kmr->kfi_mr);
+        }
+
+        ret = kfi_sendv(kqp->ep, iov, descs, wr->num_sge,
+                        0, /* kfi_addr */
+                        (void *)wr->wr_id);
+    } else {
+        /* Single segment */
+        void *buf = (void *)(uintptr_t)wr->sg_list[0].addr;
+        size_t len = wr->sg_list[0].length;
+
+        kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[0].lkey;
+        desc = kfi_mr_desc(kmr->kfi_mr);
+
+        ret = kfi_send(kqp->ep, buf, len, desc,
+                       0, /* kfi_addr */
+                       (void *)wr->wr_id);
+    }
+
+    if (ret < 0 && ret != -KFI_EAGAIN) {
+        pr_err("kfi_send failed: %zd\n", ret);
+        return (int)ret;
+    }
+
+    return (ret == -KFI_EAGAIN) ? -EAGAIN : 0;
+}
+
+int kfi_do_rdma_read(struct kfi_qp *kqp, const struct ib_send_wr *wr)
+{
+    struct ib_rdma_wr *rdma_wr = container_of(wr, struct ib_rdma_wr, wr);
+    struct kfi_mr *kmr;
+    void *desc = NULL;
+    ssize_t ret;
+    int i;
+
+    if (wr->num_sge > 1) {
+        /* Vectored read */
+        struct kvec iov[KFI_MAX_SGE];
+        void *descs[KFI_MAX_SGE];
+
+        if (wr->num_sge > KFI_MAX_SGE) {
+            pr_err("kfi_do_rdma_read: num_sge %d exceeds max %d\n",
+                   wr->num_sge, KFI_MAX_SGE);
+            return -EINVAL;
+        }
+
+        for (i = 0; i < wr->num_sge; i++) {
+            iov[i].iov_base = (void *)(uintptr_t)wr->sg_list[i].addr;
+            iov[i].iov_len = wr->sg_list[i].length;
+
+            kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[i].lkey;
+            descs[i] = kfi_mr_desc(kmr->kfi_mr);
+        }
+
+        ret = kfi_readv(kqp->ep, iov, descs, wr->num_sge,
+                        0, /* kfi_addr */
+                        rdma_wr->remote_addr,
+                        rdma_wr->rkey,
+                        (void *)wr->wr_id);
+    } else {
+        /* Single segment */
+        void *buf = (void *)(uintptr_t)wr->sg_list[0].addr;
+        size_t len = wr->sg_list[0].length;
+
+        kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[0].lkey;
+        desc = kfi_mr_desc(kmr->kfi_mr);
+
+        ret = kfi_read(kqp->ep, buf, len, desc,
+                       0, /* kfi_addr */
+                       rdma_wr->remote_addr,
+                       rdma_wr->rkey,
+                       (void *)wr->wr_id);
+    }
+
+    if (ret < 0 && ret != -KFI_EAGAIN) {
+        pr_err("kfi_read failed: %zd\n", ret);
+        return (int)ret;
+    }
+
+    return (ret == -KFI_EAGAIN) ? -EAGAIN : 0;
+}
+
+int kfi_do_send_with_inv(struct kfi_qp *kqp, const struct ib_send_wr *wr)
+{
+    /* CXI doesn't have invalidate semantics like InfiniBand
+     * For now, just do a regular send and log the invalidate request
+     * TODO: Implement proper invalidation handling if needed
+     */
+    pr_debug("kfi_do_send_with_inv: invalidation not supported, doing regular send\n");
+    return kfi_do_send(kqp, wr);
+}
+
+int kfi_do_recv(struct kfi_qp *kqp, const struct ib_recv_wr *wr)
+{
+    struct kfi_mr *kmr;
+    void *desc = NULL;
+    ssize_t ret;
+    int i;
+
+    if (wr->num_sge > 1) {
+        /* Vectored receive */
+        struct kvec iov[KFI_MAX_SGE];
+        void *descs[KFI_MAX_SGE];
+
+        if (wr->num_sge > KFI_MAX_SGE) {
+            pr_err("kfi_do_recv: num_sge %d exceeds max %d\n",
+                   wr->num_sge, KFI_MAX_SGE);
+            return -EINVAL;
+        }
+
+        for (i = 0; i < wr->num_sge; i++) {
+            iov[i].iov_base = (void *)(uintptr_t)wr->sg_list[i].addr;
+            iov[i].iov_len = wr->sg_list[i].length;
+
+            kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[i].lkey;
+            descs[i] = kfi_mr_desc(kmr->kfi_mr);
+        }
+
+        ret = kfi_recvv(kqp->ep, iov, descs, wr->num_sge,
+                        0, /* kfi_addr */
+                        (void *)wr->wr_id);
+    } else {
+        /* Single segment */
+        void *buf = (void *)(uintptr_t)wr->sg_list[0].addr;
+        size_t len = wr->sg_list[0].length;
+
+        kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[0].lkey;
+        desc = kfi_mr_desc(kmr->kfi_mr);
+
+        ret = kfi_recv(kqp->ep, buf, len, desc,
+                       0, /* kfi_addr */
+                       (void *)wr->wr_id);
+    }
+
+    if (ret < 0 && ret != -KFI_EAGAIN) {
+        pr_err("kfi_recv failed: %zd\n", ret);
+        return (int)ret;
+    }
+
+    return (ret == -KFI_EAGAIN) ? -EAGAIN : 0;
+}
 
 /*
  * Translate ib_send_wr to kfabric operations
@@ -63,8 +235,8 @@ out_unlock:
     return ret;
 }
 
-static int kfi_do_rdma_write(struct kfi_qp *kqp,
-                              const struct ib_send_wr *wr)
+int kfi_do_rdma_write(struct kfi_qp *kqp,
+                      const struct ib_send_wr *wr)
 {
     struct ib_rdma_wr *rdma_wr = container_of(wr, struct ib_rdma_wr, wr);
     struct kfi_mr *kmr;
@@ -82,14 +254,20 @@ static int kfi_do_rdma_write(struct kfi_qp *kqp,
     
     if (wr->num_sge > 1) {
         /* Use vectored write */
-        struct iovec iov[wr->num_sge];
-        void *descs[wr->num_sge];
-        
+        struct kvec iov[KFI_MAX_SGE];
+        void *descs[KFI_MAX_SGE];
+
+        if (wr->num_sge > KFI_MAX_SGE) {
+            pr_err("kfi_do_rdma_write: num_sge %d exceeds max %d\n",
+                   wr->num_sge, KFI_MAX_SGE);
+            return -EINVAL;
+        }
+
         for (i = 0; i < wr->num_sge; i++) {
             iov[i].iov_base = (void *)(uintptr_t)wr->sg_list[i].addr;
             iov[i].iov_len = wr->sg_list[i].length;
             
-            kmr = (struct kfi_mr *)wr->sg_list[i].lkey;
+            kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[i].lkey;
             descs[i] = kfi_mr_desc(kmr->kfi_mr);
         }
         
@@ -103,7 +281,7 @@ static int kfi_do_rdma_write(struct kfi_qp *kqp,
         void *buf = (void *)(uintptr_t)wr->sg_list[0].addr;
         size_t len = wr->sg_list[0].length;
         
-        kmr = (struct kfi_mr *)wr->sg_list[0].lkey;
+        kmr = (struct kfi_mr *)(uintptr_t)wr->sg_list[0].lkey;
         desc = kfi_mr_desc(kmr->kfi_mr);
         
         ret = kfi_write(kqp->ep, buf, len, desc,
@@ -128,77 +306,16 @@ static int kfi_do_rdma_write(struct kfi_qp *kqp,
     return 0;
 }
 
-/* Memory registration with proper CXI key management */
-struct ib_mr *kfi_alloc_mr(struct ib_pd *pd,
-                            enum ib_mr_type mr_type,
-                            u32 max_num_sg)
-{
-    struct kfi_pd *kpd = container_of(pd, struct kfi_pd, pd);
-    struct kfi_mr *kmr;
-    int ret;
-    
-    kmr = kzalloc(sizeof(*kmr), GFP_KERNEL);
-    if (!kmr)
-        return ERR_PTR(-ENOMEM);
-        
-    kmr->pd = kpd;
-    atomic_set(&kmr->usecnt, 1);
-    
-    /* For CXI, we need to handle memory registration differently
-     * CXI uses 64-bit keys but NFS expects 32-bit keys
-     * We'll need to maintain a mapping table */
-    
-    switch (mr_type) {
-    case IB_MR_TYPE_MEM_REG:
-        /* Standard memory registration */
-        ret = kfi_mr_reg(kpd->kfi_domain,
-                         NULL, 0, /* will be set later via map_mr_sg */
-                         KFI_READ | KFI_WRITE | KFI_REMOTE_READ | KFI_REMOTE_WRITE,
-                         0, /* offset */
-                         0, /* requested_key - let provider choose */
-                         0, /* flags */
-                         &kmr->kfi_mr,
-                         NULL);
-        break;
-        
-    case IB_MR_TYPE_INTEGRITY:
-        /* Integrity check MR - may not be supported by CXI */
-        ret = -EOPNOTSUPP;
-        break;
-        
-    default:
-        ret = -EINVAL;
-    }
-    
-    if (ret) {
-        kfree(kmr);
-        return ERR_PTR(ret);
-    }
-    
-    /* Generate synthetic 32-bit keys from kfabric's 64-bit keys */
-    kmr->lkey = (u32)kfi_mr_key(kmr->kfi_mr);
-    kmr->rkey = kmr->lkey; /* For simplicity - may need separate mapping */
-    
-    return &kmr->mr;
-}
+/* Note: kfi_alloc_mr is implemented in kfi_memory.c */
 
 /*
  * Batch work requests for efficiency
  */
 
-#define MAX_BATCH_SIZE 16
-
-struct kfi_batch_ctx {
-    struct iovec iovs[MAX_BATCH_SIZE];
-    void *descs[MAX_BATCH_SIZE];
-    void *contexts[MAX_BATCH_SIZE];
-    int count;
-};
-
 /**
  * kfi_batch_send - Batch multiple sends
  */
-static int kfi_batch_send(struct kfi_qp *kqp, struct kfi_batch_ctx *batch)
+int kfi_batch_send(struct kfi_qp *kqp, struct kfi_batch_ctx *batch)
 {
     int i;
     ssize_t ret;
@@ -206,22 +323,20 @@ static int kfi_batch_send(struct kfi_qp *kqp, struct kfi_batch_ctx *batch)
     if (batch->count == 0)
         return 0;
 
-    /* Use FI_MORE for all but last */
-    for (i = 0; i < batch->count - 1; i++) {
+    /* Send all operations in batch
+     * Note: KFI_MORE flag would indicate batching but is not directly
+     * supported in this kfabric API - batching happens implicitly
+     */
+    for (i = 0; i < batch->count; i++) {
         ret = kfi_sendv(kqp->ep, &batch->iovs[i], &batch->descs[i], 1,
                         0, batch->contexts[i]);
         if (ret < 0 && ret != -KFI_EAGAIN) {
             pr_err("kfi_sendv[%d] failed: %zd\n", i, ret);
             return (int)ret;
         }
-        /* Mark with FI_MORE to batch */
-        kfi_tx_attr_set(kqp->ep, KFI_MORE);
     }
 
-    /* Last one without FI_MORE - flushes batch */
-    kfi_tx_attr_set(kqp->ep, 0);
-    ret = kfi_sendv(kqp->ep, &batch->iovs[i], &batch->descs[i], 1,
-                    0, batch->contexts[i]);
+    ret = 0; /* Success if we got here */
 
     if (ret < 0 && ret != -KFI_EAGAIN) {
         pr_err("kfi_sendv[%d] failed: %zd\n", i, ret);

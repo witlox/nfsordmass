@@ -45,18 +45,31 @@ struct ib_device **kfi_get_devices(int *num_devices)
     int ret;
 
     /* Set up hints for CXI provider */
-    hints = kfi_allocinfo();
+    hints = kzalloc(sizeof(*hints), GFP_KERNEL);
     if (!hints)
         return NULL;
+
+    hints->fabric_attr = kzalloc(sizeof(*hints->fabric_attr), GFP_KERNEL);
+    hints->ep_attr = kzalloc(sizeof(*hints->ep_attr), GFP_KERNEL);
+    if (!hints->fabric_attr || !hints->ep_attr) {
+        kfree(hints->ep_attr);
+        kfree(hints->fabric_attr);
+        kfree(hints);
+        return NULL;
+    }
 
     hints->fabric_attr->prov_name = kstrdup("cxi", GFP_KERNEL);
     hints->caps = KFI_MSG | KFI_RMA | KFI_TAGGED;
     hints->mode = KFI_CONTEXT;
     hints->ep_attr->type = KFI_EP_RDM; /* Reliable datagram */
 
-    /* Query available fabrics */
-    ret = kfi_getinfo(KFI_VERSION(1, 0), NULL, NULL, 0, hints, &info);
-    kfi_freeinfo(hints);
+    /* Query available fabrics - kfi_getinfo signature: (version, hints, info) */
+    ret = kfi_getinfo(KFI_VERSION(1, 0), hints, &info);
+
+    kfree(hints->fabric_attr->prov_name);
+    kfree(hints->ep_attr);
+    kfree(hints->fabric_attr);
+    kfree(hints);
     
     if (ret) {
         pr_err("kfi_getinfo failed: %d\n", ret);
@@ -186,6 +199,37 @@ EXPORT_SYMBOL(kfi_dealloc_pd);
  * COMPLETION QUEUE OPERATIONS
  * ============================================================================
  */
+
+/**
+ * kfi_cq_comp_worker - Completion queue worker function
+ * @work: Work struct
+ *
+ * This function is called asynchronously to process completion queue events.
+ * It reads completions from the kfabric CQ and calls the user's completion
+ * handler if one is registered.
+ */
+void kfi_cq_comp_worker(struct work_struct *work)
+{
+    struct kfi_cq *kcq = container_of(work, struct kfi_cq, comp_work);
+    struct kfi_cq_data_entry entries[16];
+    ssize_t ret;
+    int i;
+
+    /* Try to read completions */
+    ret = kfi_cq_read(kcq->kfi_cq, entries, 16);
+    if (ret > 0) {
+        pr_debug("kfi_cq_comp_worker: processed %zd completions\n", ret);
+
+        /* Call completion handler if registered */
+        if (kcq->comp_handler) {
+            for (i = 0; i < ret; i++) {
+                kcq->comp_handler(&kcq->cq, kcq->cq_context);
+            }
+        }
+    } else if (ret < 0 && ret != -KFI_EAGAIN) {
+        pr_err("kfi_cq_comp_worker: kfi_cq_read failed: %zd\n", ret);
+    }
+}
 
 /**
  * kfi_create_cq - Create completion queue
@@ -359,6 +403,32 @@ err_close_ep:
 EXPORT_SYMBOL(kfi_create_qp);
 
 /**
+ * kfi_setup_av - Setup address vector from IB address handle
+ * @kqp: kfabric queue pair
+ * @ah_attr: IB address handle attributes
+ *
+ * Returns: 0 on success, negative error on failure
+ *
+ * TODO: In production, this should properly translate IB address handle
+ * attributes to kfabric address vector. For now, this is a stub.
+ */
+int kfi_setup_av(struct kfi_qp *kqp, struct rdma_ah_attr *ah_attr)
+{
+    if (!kqp || !ah_attr)
+        return -EINVAL;
+
+    pr_debug("kfi_setup_av: stub implementation\n");
+
+    /* TODO: Implement proper AV setup:
+     * 1. Extract remote address from ah_attr
+     * 2. Insert into existing AV or create new one
+     * 3. Store the kfi_addr_t for future operations
+     */
+
+    return 0;
+}
+
+/**
  * kfi_modify_qp - Modify queue pair state
  * @qp: Queue pair to modify
  * @attr: New attributes
@@ -458,7 +528,7 @@ EXPORT_SYMBOL(kfi_destroy_qp);
  * ============================================================================
  */
 
-static int __init kfi_verbs_compat_init(void)
+int __init kfi_verbs_compat_init(void)
 {
     idr_init(&qp_idr);
     
@@ -469,7 +539,7 @@ static int __init kfi_verbs_compat_init(void)
     return 0;
 }
 
-static void __exit kfi_verbs_compat_exit(void)
+void kfi_verbs_compat_exit(void)
 {
     struct kfi_device *kdev, *tmp;
 
@@ -490,5 +560,4 @@ static void __exit kfi_verbs_compat_exit(void)
     pr_info("kfi_verbs_compat: Cleaned up\n");
 }
 
-module_init(kfi_verbs_compat_init);
-module_exit(kfi_verbs_compat_exit);
+/* Note: init/exit called from kfi_transport.c main module */

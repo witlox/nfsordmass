@@ -8,15 +8,9 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>
 #include "../include/kfi_internal.h"
+#include "../include/kfi_verbs_compat.h"
 
-struct kfi_progress_thread {
-    struct task_struct *thread;
-    struct kfi_device *device;
-    atomic_t should_stop;
-    wait_queue_head_t wait_queue;
-};
-
-static struct kfi_progress_thread *progress_threads[MAX_DEVICES];
+static struct kfi_progress_thread *progress_threads[KFI_MAX_DEVICES];
 static int num_progress_threads = 0;
 
 /**
@@ -65,7 +59,7 @@ int kfi_progress_start(struct kfi_device *device)
 {
     struct kfi_progress_thread *pt;
 
-    if (num_progress_threads >= MAX_DEVICES)
+    if (num_progress_threads >= KFI_MAX_DEVICES)
         return -ENOMEM;
 
     pt = kzalloc(sizeof(*pt), GFP_KERNEL);

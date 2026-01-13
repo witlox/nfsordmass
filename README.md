@@ -1,5 +1,32 @@
 #  NFS over RDMA for HPE Slingshot
-NFS over RDMA for HPE Slingshot using the kfabric kernel fabric interface. 
+NFS over RDMA for HPE Slingshot using the kfabric kernel fabric interface.
+
+## Build Dependencies
+
+### kfabric Headers
+This project requires kfabric (kernel fabric interface) headers at build time. You don't need to install kfabric system-wide.
+
+**Quick Setup:**
+```bash
+./scripts/setup_kfabric.sh
+```
+
+This will clone kfabric into `external/kfabric/` as a local build dependency.
+
+**Manual Setup (Alternative):**
+```bash
+# Clone kfabric locally
+mkdir -p external
+git clone https://github.com/ofiwg/kfabric.git external/kfabric
+```
+
+The Makefile automatically detects and uses:
+1. `external/kfabric/include` (local, preferred)
+2. `/usr/src/kfabric/include` (system-wide, fallback)
+
+### Other Requirements
+- Linux kernel headers for your running kernel
+- CXI hardware and drivers (for runtime) 
 
 ## System Architecture Analysis
 Current NFSoRDMA Stack, the existing Linux implementation has this layering:

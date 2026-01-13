@@ -10,14 +10,6 @@
 #include <linux/hash.h>
 #include "../include/kfi_internal.h"
 
-struct key_map_entry {
-    u32 ib_key;        /* 32-bit key for NFS */
-    u64 kfi_key;       /* 64-bit key from CXI */
-    struct rb_node ib_node;   /* RB tree by ib_key */
-    struct hlist_node kfi_node; /* Hash table by kfi_key */
-    atomic_t refcount;
-};
-
 static struct rb_root ib_key_tree = RB_ROOT;
 static DEFINE_SPINLOCK(ib_key_lock);
 

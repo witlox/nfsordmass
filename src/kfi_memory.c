@@ -36,7 +36,7 @@ struct ib_mr *kfi_alloc_mr(struct ib_pd *pd,
 {
     struct kfi_pd *kpd = ibpd_to_kfi(pd);
     struct kfi_mr *kmr;
-    struct kfi_mr_reg_attr attr = {};
+    u64 access;
     u32 ib_key;
     int ret;
 
@@ -54,27 +54,26 @@ struct ib_mr *kfi_alloc_mr(struct ib_pd *pd,
 
     kmr->pd = kpd;
     atomic_set(&kmr->usecnt, 1);
-    
-    /* Set up registration attributes
+
+    /* Set up access flags
      * For CXI, we create an "empty" MR that will be populated later
      * via kfi_map_mr_sg()
      */
-    attr.requested_key = 0; /* Let provider choose */
-    attr.access = KFI_READ | KFI_WRITE | KFI_REMOTE_READ | KFI_REMOTE_WRITE;
-    attr.iov_count = max_num_sg;
-    attr.mr_iov = NULL; /* Will be set in map_mr_sg */
+    access = KFI_READ | KFI_WRITE | KFI_REMOTE_READ | KFI_REMOTE_WRITE;
 
     /* Register with kfabric
      * For fast registration, we pass NULL buffer - actual mapping done later
+     * kfi_mr_reg signature: (domain, buf, len, access, offset, requested_key, flags, mr, context, event)
      */
     ret = kfi_mr_reg(kpd->kfi_domain,
                      NULL, 0, /* No buffer yet */
-                     attr.access,
+                     access,
                      0, /* offset */
-                     attr.requested_key,
-                     KFI_MR_VIRT_ADDR, /* Use virtual addressing */
+                     0, /* requested_key - let provider choose */
+                     0, /* flags */
                      &kmr->kfi_mr,
-                     NULL);
+                     NULL, /* context */
+                     NULL); /* event */
     
     if (ret) {
         kfi_err("kfi_mr_reg failed: %d\n", ret);
@@ -143,7 +142,8 @@ struct ib_mr *kfi_get_dma_mr(struct ib_pd *pd, int mr_access_flags)
                      0, /* Let provider choose key */
                      0, /* flags */
                      &kmr->kfi_mr,
-                     NULL);
+                     NULL, /* context */
+                     NULL); /* event */
     
     if (ret) {
         kfi_err("kfi_mr_reg (DMA) failed: %d\n", ret);
@@ -266,22 +266,27 @@ int kfi_map_mr_sg(struct ib_mr *mr, struct scatterlist *sg,
     }
 
     /* Update the kfabric MR with the actual memory regions
-     * CXI provider should support updating an existing MR
+     * NOTE: kfi_mr_regv doesn't exist in kfabric API
+     * For now, register the first segment only. Full scatter-gather
+     * support would require multiple MRs or provider-specific extensions
      */
-    ret = kfi_mr_regv(kmr->pd->kfi_domain,
-                      iovs,
-                      mapped,
-                      kmr->access_flags,
-                      0, /* offset */
-                      kfi_mr_key(kmr->kfi_mr), /* Use existing key */
-                      0, /* flags */
-                      &kmr->kfi_mr, /* Update in place */
-                      NULL);
+    if (mapped > 0) {
+        ret = kfi_mr_reg(kmr->pd->kfi_domain,
+                         iovs[0].iov_base,
+                         iovs[0].iov_len,
+                         kmr->access_flags,
+                         0, /* offset */
+                         kfi_mr_key(kmr->kfi_mr), /* Use existing key */
+                         0, /* flags */
+                         &kmr->kfi_mr, /* Update in place */
+                         NULL, /* context */
+                         NULL); /* event */
 
-    if (ret) {
-        kfi_err("kfi_mr_regv failed: %d\n", ret);
-        kfree(iovs);
-        return ret;
+        if (ret) {
+            kfi_err("kfi_mr_reg failed: %d\n", ret);
+            kfree(iovs);
+            return ret;
+        }
     }
 
     /* Calculate total length and base address */
@@ -429,11 +434,13 @@ void kfi_mr_cache_destroy(struct kfi_mr_cache *cache)
     
     spin_unlock_irqrestore(&cache->lock, flags);
 
-    kfi_info("MR cache destroyed (hits=%lld misses=%lld hit_rate=%.2f%%)\n",
-             atomic64_read(&cache->hits),
-             atomic64_read(&cache->misses),
-             atomic64_read(&cache->hits) * 100.0 /
-             (atomic64_read(&cache->hits) + atomic64_read(&cache->misses)));
+    s64 hits = atomic64_read(&cache->hits);
+    s64 misses = atomic64_read(&cache->misses);
+    s64 total = hits + misses;
+    int hit_rate = total > 0 ? (int)((hits * 100) / total) : 0;
+
+    kfi_info("MR cache destroyed (hits=%lld misses=%lld hit_rate=%d%%)\n",
+             hits, misses, hit_rate);
 
     kfree(cache);
 }
@@ -539,7 +546,6 @@ struct kfi_mr *kfi_mr_cache_get(struct kfi_mr_cache *cache,
     }
 
     /* Insert into RB tree */
-    node = &cache->root.rb_node;
     struct rb_node **new = &cache->root.rb_node, *parent = NULL;
     
     while (*new) {

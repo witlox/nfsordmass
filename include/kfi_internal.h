@@ -29,6 +29,7 @@
 #define KFI_MAX_DEVICES         8
 #define KFI_MAX_SGE             16      /* Max scatter-gather entries */
 #define KFI_MAX_INLINE_DATA     512     /* Max inline data size */
+#define KFI_MAX_POLL_ENTRIES    32      /* Max poll entries per call */
 #define KFI_DEFAULT_CQ_SIZE     1024
 #define KFI_DEFAULT_QP_DEPTH    256
 #define KFI_PROGRESS_INTERVAL   100     /* usec */
@@ -319,7 +320,7 @@ struct kfi_progress_thread {
  * @count: Number of batched operations
  */
 struct kfi_batch_ctx {
-    struct iovec iovs[KFI_MAX_BATCH_SIZE];
+    struct kvec iovs[KFI_MAX_BATCH_SIZE];
     void *descs[KFI_MAX_BATCH_SIZE];
     void *contexts[KFI_MAX_BATCH_SIZE];
     int count;
@@ -330,6 +331,10 @@ struct kfi_batch_ctx {
  * FUNCTION PROTOTYPES - Device Management (kfi_verbs_compat.c)
  * ============================================================================
  */
+
+/* Module init/exit */
+int kfi_verbs_compat_init(void);
+void kfi_verbs_compat_exit(void);
 
 /* Device enumeration */
 struct ib_device **kfi_get_devices(int *num_devices);
@@ -378,6 +383,7 @@ int kfi_req_notify_cq(struct ib_cq *cq, enum ib_cq_notify_flags flags);
 int kfi_do_send(struct kfi_qp *kqp, const struct ib_send_wr *wr);
 int kfi_do_rdma_write(struct kfi_qp *kqp, const struct ib_send_wr *wr);
 int kfi_do_rdma_read(struct kfi_qp *kqp, const struct ib_send_wr *wr);
+int kfi_do_send_with_inv(struct kfi_qp *kqp, const struct ib_send_wr *wr);
 int kfi_do_recv(struct kfi_qp *kqp, const struct ib_recv_wr *wr);
 
 /* Batching */
@@ -430,7 +436,7 @@ void kfi_mr_cache_flush(struct kfi_mr_cache *cache);
 int kfi_connect_ep(struct kfi_qp *kqp, struct sockaddr *remote_addr);
 int kfi_setup_av(struct kfi_qp *kqp, struct rdma_ah_attr *ah_attr);
 int kfi_get_auth_key(struct kfi_qp *kqp);
-int kfi_query_default_vni(long *vni);
+int kfi_query_default_vni(uint16_t *vni);
 
 /* VNI parsing */
 int kfi_parse_vni_from_options(const char *options, uint16_t *vni_out);

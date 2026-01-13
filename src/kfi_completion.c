@@ -1,6 +1,8 @@
 #include "kfi_verbs_compat.h"
 #include "../include/kfi_internal.h"
 
+#define KFI_MAX_POLL_ENTRIES 32
+
 /*
  * Poll completions and translate to ib_wc format
  * This is performance-critical code
@@ -8,11 +10,15 @@
 int kfi_poll_cq(struct ib_cq *cq, int num_entries, struct ib_wc *wc)
 {
     struct kfi_cq *kcq = container_of(cq, struct kfi_cq, cq);
-    struct kfi_cq_data_entry cq_entry[num_entries];
+    struct kfi_cq_data_entry cq_entry[KFI_MAX_POLL_ENTRIES];
+    int poll_count;
+
+    /* Limit to max poll entries */
+    poll_count = num_entries > KFI_MAX_POLL_ENTRIES ? KFI_MAX_POLL_ENTRIES : num_entries;
     ssize_t ret;
     int i, count = 0;
     
-    ret = kfi_cq_read(kcq->kfi_cq, cq_entry, num_entries);
+    ret = kfi_cq_read(kcq->kfi_cq, cq_entry, poll_count);
     if (ret < 0) {
         if (ret == -KFI_EAGAIN)
             return 0; /* No completions available */
@@ -54,12 +60,12 @@ int kfi_poll_cq(struct ib_cq *cq, int num_entries, struct ib_wc *wc)
     return count;
 }
 
-static enum ib_wc_status kfi_errno_to_ib_status(int kfi_err)
+enum ib_wc_status kfi_errno_to_ib_status(int kfi_err)
 {
     switch (-kfi_err) {
     case KFI_SUCCESS:
         return IB_WC_SUCCESS;
-    case KFI_ETRUNC:
+    case KKFI_ETRUNC:
         return IB_WC_LOC_LEN_ERR;
     case KFI_EACCES:
         return IB_WC_LOC_PROT_ERR;

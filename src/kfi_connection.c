@@ -1,42 +1,31 @@
 #include "kfi_verbs_compat.h"
-#include <linux/cxi/cxi.h> /* CXI driver headers */
+#include "kfi_internal.h"
+#include <linux/limits.h>
+/* CXI driver headers would be needed for production CXI-specific features */
+/* #include <linux/cxi/cxi.h> */
 
 /*
  * Handle CXI VNI (Virtual Network Identifier) authentication
  * This is critical - CXI requires proper auth keys for isolation
  */
 
-struct kfi_cxi_auth_key {
-    uint16_t vni;
-    uint16_t service_id;
-    /* Additional fields as needed */
-};
-
-/*
- * Extract VNI from environment or job scheduler
- * In production, this would interface with Slurm or similar
+/**
+ * kfi_query_default_vni - Query default VNI from CXI service
+ * @vni: Pointer to store the VNI value
+ *
+ * Returns: 0 on success, negative error on failure
+ *
+ * TODO: In production, this should query the CXI service for the default VNI.
+ * For now, returns KFI_DEFAULT_VNI.
  */
-static int kfi_get_auth_key(struct kfi_qp *kqp)
+int kfi_query_default_vni(uint16_t *vni)
 {
-    char *vni_str;
-    long vni;
-    
-    /* Check SLINGSHOT_VNIS environment variable first */
-    vni_str = getenv("SLINGSHOT_VNIS");
-    if (vni_str) {
-        if (kstrtol(vni_str, 10, &vni) == 0) {
-            kqp->auth_key = kzalloc(sizeof(*kqp->auth_key), GFP_KERNEL);
-            if (!kqp->auth_key)
-                return -ENOMEM;
-            kqp->auth_key->vni = (uint16_t)vni;
-            return 0;
-        }
-    }
-    
-    /* Fallback: Query CXI service API */
-    /* This requires coordination with system management */
-    pr_warn("kfi: No VNI found, NFS operations may fail authentication\n");
-    return -EACCES;
+    if (!vni)
+        return -EINVAL;
+
+    *vni = KFI_DEFAULT_VNI;
+    pr_debug("kfi_query_default_vni: returning default VNI %u\n", *vni);
+    return 0;
 }
 
 /*
@@ -127,7 +116,7 @@ int kfi_parse_vni_from_options(const char *options, uint16_t *vni_out)
         if (strcmp(key, "vni") == 0) {
             unsigned long vni;
             ret = kstrtoul(value, 10, &vni);
-            if (ret == 0 && vni <= UINT16_MAX) {
+            if (ret == 0 && vni <= U16_MAX) {
                 *vni_out = (uint16_t)vni;
                 pr_info("kfi: Parsed VNI=%u from mount options\n", *vni_out);
             }
@@ -144,8 +133,7 @@ int kfi_parse_vni_from_options(const char *options, uint16_t *vni_out)
  */
 int kfi_get_auth_key(struct kfi_qp *kqp)
 {
-    char *vni_env;
-    long vni;
+    uint16_t vni;
     int ret;
 
     kqp->auth_key = kzalloc(sizeof(*kqp->auth_key), GFP_KERNEL);
@@ -166,7 +154,7 @@ int kfi_get_auth_key(struct kfi_qp *kqp)
     /* Priority 3: Query CXI service API */
     ret = kfi_query_default_vni(&vni);
     if (ret == 0) {
-        kqp->auth_key->vni = (uint16_t)vni;
+        kqp->auth_key->vni = vni;
         pr_info("kfi: Using VNI %u from CXI service\n", kqp->auth_key->vni);
         return 0;
     }
