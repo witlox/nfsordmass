@@ -55,7 +55,9 @@ KFABRIC_SYMVERS := $(PWD)/external/kfabric.symvers
 
 all: modules
 
+# Pre-clean stale build artifacts before building to avoid kbuild cache issues
 modules:
+	@rm -f src/.*.cmd .*.cmd 2>/dev/null || true
 	$(MAKE) -C $(KDIR) M=$(PWD) modules KBUILD_EXTRA_SYMBOLS="$(KFABRIC_SYMVERS)"
 
 tests:
