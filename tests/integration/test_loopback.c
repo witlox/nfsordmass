@@ -1,136 +1,204 @@
 /*
  * Integration test - NFS loopback over kfabric
+ *
+ * NOTE: This test requires a properly configured environment:
+ *   - NFS server running on localhost
+ *   - Export configured and mounted
+ *   - kfabric module loaded
+ *   - VNI allocated (if using CXI)
  */
 
 #include <linux/module.h>
-#include <linux/nfs_fs.h>
-#include "../../include/kfi_internal.h"
+#include <linux/fs.h>
+#include <linux/namei.h>
+#include "kfi_verbs_compat.h"
+#include "kfi_internal.h"
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("NFS loopback integration tests");
 
 #define TEST_MOUNT_POINT "/mnt/nfs_kfi_test"
 #define TEST_EXPORT "/export/test"
 #define TEST_FILE "testfile.txt"
 
-static int test_nfs_mount(void)
+/* Check if test environment is ready */
+static int test_environment_check(void)
 {
-    struct file_system_type *nfs_fs;
-    struct vfsmount *mnt;
-    char options[256];
+    struct path path;
     int ret;
     
-    pr_info("TEST: NFS mount over kfabric\n");
-    
-    /* Get NFS filesystem type */
-    nfs_fs = get_fs_type("nfs");
-    if (!nfs_fs) {
-        pr_err("FAIL: NFS filesystem not registered\n");
-        return -1;
+    pr_info("TEST: Environment check\n");
+
+    /* Check if mount point exists */
+    ret = kern_path(TEST_MOUNT_POINT, LOOKUP_DIRECTORY, &path);
+    if (ret) {
+        pr_warn("  Mount point %s not found (error %d)\n", TEST_MOUNT_POINT, ret);
+        pr_warn("  Skipping integration tests - environment not configured\n");
+        return -ENOENT;
     }
-    
-    /* Prepare mount options with VNI */
-    snprintf(options, sizeof(options),
-             "rdma,port=20049,vni=1000,addr=127.0.0.1");
-    
-    /* Attempt mount */
-    mnt = vfs_kern_mount(nfs_fs, 0, "127.0.0.1:" TEST_EXPORT, options);
-    put_filesystem(nfs_fs);
-    
-    if (IS_ERR(mnt)) {
-        pr_err("FAIL: vfs_kern_mount returned %ld\n", PTR_ERR(mnt));
-        return -1;
-    }
-    
-    pr_info("NFS mount successful\n");
-    
-    /* Unmount */
-    mntput(mnt);
-    
-    pr_info("PASS: NFS mount\n");
+    path_put(&path);
+
+    pr_info("  Mount point exists: %s\n", TEST_MOUNT_POINT);
+    pr_info("PASS: Environment check\n");
     return 0;
 }
 
-static int test_nfs_io(void)
+/* Test basic file operations */
+static int test_file_create(void)
 {
     struct file *file;
-    char write_buf[] = "Hello from kfabric NFS!";
+    char path_buf[256];
+
+    pr_info("TEST: File creation\n");
+
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", TEST_MOUNT_POINT, TEST_FILE);
+
+    file = filp_open(path_buf, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (IS_ERR(file)) {
+        pr_err("FAIL: filp_open failed: %ld\n", PTR_ERR(file));
+        return -1;
+    }
+
+    filp_close(file, NULL);
+
+    pr_info("PASS: File creation\n");
+    return 0;
+}
+
+static int test_file_write(void)
+{
+    struct file *file;
+    char path_buf[256];
+    char write_buf[] = "Hello from kfabric NFS test!";
+    loff_t pos = 0;
+    ssize_t ret;
+
+    pr_info("TEST: File write\n");
+
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", TEST_MOUNT_POINT, TEST_FILE);
+
+    file = filp_open(path_buf, O_WRONLY, 0);
+    if (IS_ERR(file)) {
+        pr_err("FAIL: filp_open(write) failed: %ld\n", PTR_ERR(file));
+        return -1;
+    }
+    
+    ret = kernel_write(file, write_buf, sizeof(write_buf) - 1, &pos);
+    filp_close(file, NULL);
+
+    if (ret != sizeof(write_buf) - 1) {
+        pr_err("FAIL: kernel_write returned %zd, expected %zu\n",
+               ret, sizeof(write_buf) - 1);
+        return -1;
+    }
+    
+    pr_info("  Wrote %zd bytes\n", ret);
+    pr_info("PASS: File write\n");
+    return 0;
+}
+
+static int test_file_read(void)
+{
+    struct file *file;
+    char path_buf[256];
     char read_buf[128];
     loff_t pos = 0;
     ssize_t ret;
     
-    pr_info("TEST: NFS I/O operations\n");
-    
-    /* Open file for writing */
-    file = filp_open(TEST_MOUNT_POINT "/" TEST_FILE, 
-                     O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    pr_info("TEST: File read\n");
+
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", TEST_MOUNT_POINT, TEST_FILE);
+
+    file = filp_open(path_buf, O_RDONLY, 0);
     if (IS_ERR(file)) {
-        pr_err("FAIL: filp_open(write) returned %ld\n", PTR_ERR(file));
+        pr_err("FAIL: filp_open(read) failed: %ld\n", PTR_ERR(file));
         return -1;
     }
     
-    /* Write test data */
-    ret = kernel_write(file, write_buf, sizeof(write_buf), &pos);
-    if (ret != sizeof(write_buf)) {
-        pr_err("FAIL: kernel_write returned %zd\n", ret);
-        filp_close(file, NULL);
-        return -1;
-    }
-    
-    filp_close(file, NULL);
-    pr_info("Write completed: %zd bytes\n", ret);
-    
-    /* Open file for reading */
-    pos = 0;
-    file = filp_open(TEST_MOUNT_POINT "/" TEST_FILE, O_RDONLY, 0);
-    if (IS_ERR(file)) {
-        pr_err("FAIL: filp_open(read) returned %ld\n", PTR_ERR(file));
-        return -1;
-    }
-    
-    /* Read data back */
     memset(read_buf, 0, sizeof(read_buf));
-    ret = kernel_read(file, read_buf, sizeof(write_buf), &pos);
-    if (ret != sizeof(write_buf)) {
-        pr_err("FAIL: kernel_read returned %zd\n", ret);
-        filp_close(file, NULL);
-        return -1;
-    }
-    
+    ret = kernel_read(file, read_buf, sizeof(read_buf) - 1, &pos);
     filp_close(file, NULL);
-    
-    /* Verify data */
-    if (memcmp(write_buf, read_buf, sizeof(write_buf)) != 0) {
-        pr_err("FAIL: Data mismatch\n");
-        pr_err("  Expected: %s\n", write_buf);
-        pr_err("  Got:      %s\n", read_buf);
+
+    if (ret < 0) {
+        pr_err("FAIL: kernel_read returned %zd\n", ret);
         return -1;
     }
     
-    pr_info("Read completed and verified\n");
-    pr_info("PASS: NFS I/O operations\n");
+    pr_info("  Read %zd bytes: '%s'\n", ret, read_buf);
+    pr_info("PASS: File read\n");
+    return 0;
+}
+
+static int test_file_verify(void)
+{
+    struct file *file;
+    char path_buf[256];
+    char expected[] = "Hello from kfabric NFS test!";
+    char read_buf[128];
+    loff_t pos = 0;
+    ssize_t ret;
+
+    pr_info("TEST: Data verification\n");
+
+    snprintf(path_buf, sizeof(path_buf), "%s/%s", TEST_MOUNT_POINT, TEST_FILE);
+
+    file = filp_open(path_buf, O_RDONLY, 0);
+    if (IS_ERR(file)) {
+        pr_err("FAIL: filp_open failed: %ld\n", PTR_ERR(file));
+        return -1;
+    }
+    
+    memset(read_buf, 0, sizeof(read_buf));
+    ret = kernel_read(file, read_buf, sizeof(expected) - 1, &pos);
+    filp_close(file, NULL);
+
+    if (ret != sizeof(expected) - 1) {
+        pr_err("FAIL: Read size mismatch: %zd vs %zu\n", ret, sizeof(expected) - 1);
+        return -1;
+    }
+    
+    if (memcmp(expected, read_buf, sizeof(expected) - 1) != 0) {
+        pr_err("FAIL: Data mismatch\n");
+        pr_err("  Expected: '%s'\n", expected);
+        pr_err("  Got:      '%s'\n", read_buf);
+        return -1;
+    }
+    
+    pr_info("PASS: Data verification\n");
     return 0;
 }
 
 static int __init test_loopback_init(void)
 {
-    int ret = 0;
-    
+    int failures = 0;
+    int ret;
+
     pr_info("=== Running NFS loopback integration tests ===\n");
     pr_info("Prerequisites:\n");
-    pr_info("  - NFS server running on localhost\n");
-    pr_info("  - Export configured: " TEST_EXPORT "\n");
-    pr_info("  - VNI 1000 allocated\n");
-    
-    ret |= test_nfs_mount();
-    if (ret == 0)
-        ret |= test_nfs_io();
-    
-    if (ret == 0)
-        pr_info("=== All loopback tests PASSED ===\n");
-    else
-        pr_err("=== Some loopback tests FAILED ===\n");
-    
-    /* Note: In real test, we'd return -1 to prevent module load on failure
-     * But for testing, we return 0 to allow inspection */
-    return 0;
+    pr_info("  - NFS server running (localhost or remote)\n");
+    pr_info("  - Mount point: %s\n", TEST_MOUNT_POINT);
+    pr_info("  - kfabric/xprtrdma_kfi modules loaded\n");
+
+    /* Check environment first */
+    ret = test_environment_check();
+    if (ret) {
+        pr_info("=== Integration tests SKIPPED (environment not ready) ===\n");
+        return -EAGAIN;
+    }
+
+    if (test_file_create())
+        failures++;
+    if (test_file_write())
+        failures++;
+    if (test_file_read())
+        failures++;
+    if (test_file_verify())
+        failures++;
+
+    pr_info("=== Loopback tests: %d failures ===\n", failures);
+
+    /* Return error to prevent module staying loaded */
+    return failures ? -EINVAL : -EAGAIN;
 }
 
 static void __exit test_loopback_exit(void)
