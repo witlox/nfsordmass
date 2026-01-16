@@ -14,37 +14,43 @@ xprtrdma_kfi-y := src/kfi_transport.o \
 svcrdma_kfi-y := src/svc_kfi_transport.o \
                  src/svc_kfi_ops.o
 
-# Include paths
+# Include paths - use $(src) which kbuild sets to the source directory
 ccflags-y += -I$(src)/include
 
-KDIR := /lib/modules/$(shell uname -r)/build
+# Kernel build directory and current working directory
+KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 
-# kfabric headers - use PWD for detection, src for actual includes
-# During kernel build, $(src) is set by kbuild, use $(M) or absolute path for detection
+# kfabric headers detection
+# When called from kbuild, $(src) is set; otherwise use $(PWD)
 ifdef KERNELRELEASE
-    # We're being called from kernel build system, $(src) is valid
     KFABRIC_WRAPPER := $(src)/external/kfabric-headers
     KFABRIC_LOCAL := $(src)/external/kfabric/include
+    KFABRIC_SYSTEM := /usr/src/kfabric/include
+
+    ifneq ($(wildcard $(KFABRIC_WRAPPER)/rdma/kfi/fabric.h),)
+        ccflags-y += -I$(KFABRIC_WRAPPER)
+        ccflags-y += -I$(KFABRIC_LOCAL)
+        $(info Using local kfabric: $(KFABRIC_WRAPPER) + $(KFABRIC_LOCAL))
+    else ifneq ($(wildcard $(KFABRIC_SYSTEM)/rdma/kfi/fabric.h),)
+        ccflags-y += -I$(KFABRIC_SYSTEM)
+        $(info Using system kfabric headers: $(KFABRIC_SYSTEM))
+    else
+        $(error kfabric headers not found. Run: ./scripts/setup_kfabric.sh)
+    endif
 else
-    # Top-level make, use PWD
+    # Top-level make invocation - just check headers exist
     KFABRIC_WRAPPER := $(PWD)/external/kfabric-headers
     KFABRIC_LOCAL := $(PWD)/external/kfabric/include
-endif
+    KFABRIC_SYSTEM := /usr/src/kfabric/include
 
-KFABRIC_SYSTEM := /usr/src/kfabric/include
-
-# Check for local kfabric (wrapper + actual headers)
-ifneq ($(wildcard $(KFABRIC_WRAPPER)/rdma/kfi/fabric.h),)
-    ccflags-y += -I$(KFABRIC_WRAPPER)
-    ccflags-y += -I$(KFABRIC_LOCAL)
-    $(info Using local kfabric: $(KFABRIC_WRAPPER) + $(KFABRIC_LOCAL))
-# Check for system kfabric
-else ifneq ($(wildcard $(KFABRIC_SYSTEM)/rdma/kfi/fabric.h),)
-    ccflags-y += -I$(KFABRIC_SYSTEM)
-    $(info Using system kfabric headers: $(KFABRIC_SYSTEM))
-else
-    $(error kfabric headers not found. Run: ./scripts/setup_kfabric.sh)
+    ifneq ($(wildcard $(KFABRIC_WRAPPER)/rdma/kfi/fabric.h),)
+        $(info Using local kfabric: $(KFABRIC_WRAPPER) + $(KFABRIC_LOCAL))
+    else ifneq ($(wildcard $(KFABRIC_SYSTEM)/rdma/kfi/fabric.h),)
+        $(info Using system kfabric headers: $(KFABRIC_SYSTEM))
+    else
+        $(error kfabric headers not found. Run: ./scripts/setup_kfabric.sh)
+    endif
 endif
 
 ccflags-y += -DCONFIG_SUNRPC_XPRT_RDMA_KFI
@@ -58,7 +64,28 @@ all: modules
 # Pre-clean stale build artifacts before building to avoid kbuild cache issues
 modules:
 	@rm -f src/.*.cmd .*.cmd 2>/dev/null || true
+	@echo "Checking source files..."
+	@test -f src/kfi_transport.c || (echo "ERROR: src/kfi_transport.c not found!" && exit 1)
+	@test -f src/kfi_verbs_compat.c || (echo "ERROR: src/kfi_verbs_compat.c not found!" && exit 1)
+	@echo "Source files OK, starting kernel build..."
 	$(MAKE) -C $(KDIR) M=$(PWD) modules KBUILD_EXTRA_SYMBOLS="$(KFABRIC_SYMVERS)"
+
+# Debug target to check paths and files
+debug:
+	@echo "=== Build Environment Debug ==="
+	@echo "PWD: $(PWD)"
+	@echo "KDIR: $(KDIR)"
+	@echo "KFABRIC_WRAPPER: $(KFABRIC_WRAPPER)"
+	@echo "KFABRIC_LOCAL: $(KFABRIC_LOCAL)"
+	@echo ""
+	@echo "=== Source Files ==="
+	@ls -la src/*.c 2>/dev/null || echo "No .c files in src/"
+	@echo ""
+	@echo "=== Include Files ==="
+	@ls -la include/*.h 2>/dev/null || echo "No .h files in include/"
+	@echo ""
+	@echo "=== External/kfabric ==="
+	@ls -la external/ 2>/dev/null || echo "No external/ directory"
 
 tests:
 	@if [ -f tests/Makefile ]; then $(MAKE) -C tests; fi
@@ -99,4 +126,4 @@ unload:
 test: tests
 	./scripts/run_tests.sh
 
-.PHONY: all modules tests clean distclean install load unload test
+.PHONY: all modules tests clean distclean install load unload test debug
