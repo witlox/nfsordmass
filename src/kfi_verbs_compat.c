@@ -14,8 +14,8 @@
 #include <rdma/kfi/domain.h>
 #include <rdma/kfi/endpoint.h>
 
-#include "../include/kfi_verbs_compat.h"
-#include "../include/kfi_internal.h"
+#include "kfi_verbs_compat.h"
+#include "kfi_internal.h"
 
 /* Global state */
 static LIST_HEAD(kfi_device_list);

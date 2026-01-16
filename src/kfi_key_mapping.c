@@ -8,7 +8,7 @@
 #include <linux/rbtree.h>
 #include <linux/slab.h>
 #include <linux/hash.h>
-#include "../include/kfi_internal.h"
+#include "kfi_internal.h"
 
 static struct rb_root ib_key_tree = RB_ROOT;
 static DEFINE_SPINLOCK(ib_key_lock);

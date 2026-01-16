@@ -1,5 +1,5 @@
 #include "kfi_verbs_compat.h"
-#include "../include/kfi_internal.h"
+#include "kfi_internal.h"
 
 #define KFI_MAX_POLL_ENTRIES 32
 

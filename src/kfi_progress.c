@@ -7,8 +7,8 @@
 
 #include <linux/kthread.h>
 #include <linux/sched.h>
-#include "../include/kfi_internal.h"
-#include "../include/kfi_verbs_compat.h"
+#include "kfi_internal.h"
+#include "kfi_verbs_compat.h"
 
 static struct kfi_progress_thread *progress_threads[KFI_MAX_DEVICES];
 static int num_progress_threads = 0;

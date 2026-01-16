@@ -53,17 +53,17 @@ ccflags-y += -Wall -Werror
 # External symbol dependencies (kfabric module)
 KFABRIC_SYMVERS := $(PWD)/external/kfabric.symvers
 
-all: modules tests
+all: modules
 
 modules:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules KBUILD_EXTRA_SYMBOLS="$(KFABRIC_SYMVERS)"
 
 tests:
-	$(MAKE) -C tests
+	@if [ -f tests/Makefile ]; then $(MAKE) -C tests; fi
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
-	$(MAKE) -C tests clean
+	@if [ -f tests/Makefile ]; then $(MAKE) -C tests clean; fi
 
 install: modules
 	$(MAKE) -C $(KDIR) M=$(PWD) modules_install

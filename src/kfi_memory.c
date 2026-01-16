@@ -13,7 +13,7 @@
 #include <rdma/ib_verbs.h>
 #include <rdma/kfi/mr.h>
 
-#include "../include/kfi_internal.h"
+#include "kfi_internal.h"
 
 /*
  * ============================================================================
