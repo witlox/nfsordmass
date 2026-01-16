@@ -62,8 +62,23 @@ tests:
 	@if [ -f tests/Makefile ]; then $(MAKE) -C tests; fi
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
-	@if [ -f tests/Makefile ]; then $(MAKE) -C tests clean; fi
+	-$(MAKE) -C $(KDIR) M=$(PWD) clean 2>/dev/null || true
+	@if [ -f tests/Makefile ]; then $(MAKE) -C tests clean 2>/dev/null || true; fi
+	rm -f src/*.o src/.*.cmd
+	rm -f *.o *.ko *.mod *.mod.c .*.cmd Module.symvers modules.order
+	rm -rf .tmp_versions
+
+# Deep clean - remove all generated files
+distclean: clean
+	rm -f src/*.o.* src/*.mod src/*.mod.c
+	find . -name "*.o" -delete
+	find . -name ".*.cmd" -delete
+	find . -name "*.ko" -delete
+	find . -name "*.mod" -delete
+	find . -name "*.mod.c" -delete
+	find . -name "Module.symvers" -delete
+	find . -name "modules.order" -delete
+	rm -rf .tmp_versions
 
 install: modules
 	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
@@ -82,4 +97,4 @@ unload:
 test: tests
 	./scripts/run_tests.sh
 
-.PHONY: all modules tests clean install load unload test
+.PHONY: all modules tests clean distclean install load unload test
